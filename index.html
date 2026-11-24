@@ -1,11 +1,126 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hello World</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem auto; padding: 0 1rem; max-width: 38rem; }
+        form { display: flex; flex-wrap: wrap; gap: .5rem; }
+        label { flex-basis: 100%; }
+        input, button { font: inherit; padding: .7rem; border-radius: .35rem; border: 1px solid #888; }
+        input { flex: 1; min-width: 0; }
+        button { background: #174b86; color: white; cursor: pointer; }
+        button:disabled { opacity: .6; cursor: wait; }
+        #weather-result { white-space: pre-line; line-height: 1.6; }
+        .attribution { font-size: .85rem; }
+    </style>
 </head>
 <body>
     <h1>Hello World!</h1>
+    <section aria-labelledby="weather-heading">
+        <h2 id="weather-heading">Current weather</h2>
+        <form id="weather-form">
+            <label for="location">City or location</label>
+            <input id="location" name="location" placeholder="e.g. Istanbul or Paris, France" required minlength="2" maxlength="120">
+            <button id="weather-button" type="submit">Get weather</button>
+        </form>
+        <p id="weather-result" role="status" aria-live="polite"></p>
+        <p class="attribution">Weather data: <a href="https://open-meteo.com/">Open-Meteo</a>. Location data: <a href="https://www.geonames.org/">GeoNames</a>.</p>
+    </section>
+    <script>
+        const form = document.getElementById('weather-form');
+        const input = document.getElementById('location');
+        const button = document.getElementById('weather-button');
+        const result = document.getElementById('weather-result');
+
+        function weatherDescription(code) {
+            const descriptions = {
+                0: 'Clear sky', 1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast',
+                45: 'Fog', 48: 'Freezing fog', 51: 'Light drizzle', 53: 'Drizzle',
+                55: 'Heavy drizzle', 56: 'Light freezing drizzle', 57: 'Freezing drizzle',
+                61: 'Light rain', 63: 'Rain', 65: 'Heavy rain', 66: 'Light freezing rain',
+                67: 'Heavy freezing rain', 71: 'Light snow', 73: 'Snow', 75: 'Heavy snow',
+                77: 'Snow grains', 80: 'Light rain showers', 81: 'Rain showers',
+                82: 'Heavy rain showers', 85: 'Light snow showers', 86: 'Heavy snow showers',
+                95: 'Thunderstorm', 96: 'Thunderstorm with hail', 99: 'Thunderstorm with heavy hail'
+            };
+            return descriptions[code] ?? 'Unknown conditions';
+        }
+
+        async function fetchJson(url, signal) {
+            const response = await fetch(url, { signal });
+            if (!response.ok) throw new Error('Weather service unavailable (HTTP ' + response.status + ').');
+            const data = await response.json();
+            if (data.error) throw new Error('Weather service returned an error.');
+            return data;
+        }
+
+        function measurement(value, unit) {
+            return Number.isFinite(value) ? value + ' ' + unit : 'Unavailable';
+        }
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            if (button.disabled) return;
+            const location = input.value.trim();
+            if (location.length < 2) {
+                result.textContent = 'Enter a location with at least two characters.';
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = 'Loading…';
+            result.textContent = 'Looking up weather…';
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15000);
+
+            try {
+                const geocode = new URL('https://geocoding-api.open-meteo.com/v1/search');
+                geocode.search = new URLSearchParams({ name: location, count: '1', language: 'en', format: 'json' });
+                const places = await fetchJson(geocode, controller.signal);
+                const place = places.results?.[0];
+                if (!place) {
+                    result.textContent = 'Location not found. Try a city name or city, country.';
+                    return;
+                }
+                if (!Number.isFinite(place.latitude) || !Number.isFinite(place.longitude)) {
+                    throw new Error('Location coordinates unavailable.');
+                }
+
+                const forecast = new URL('https://api.open-meteo.com/v1/forecast');
+                forecast.search = new URLSearchParams({
+                    latitude: String(place.latitude),
+                    longitude: String(place.longitude),
+                    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m',
+                    temperature_unit: 'celsius',
+                    wind_speed_unit: 'kmh',
+                    timezone: 'auto'
+                });
+                const data = await fetchJson(forecast, controller.signal);
+                const weather = data.current;
+                if (!weather || !Number.isFinite(weather.temperature_2m)) throw new Error('Current weather data unavailable.');
+                const name = [...new Set([place.name, place.admin1, place.country].filter(Boolean))].join(', ');
+                result.textContent = [
+                    name,
+                    weatherDescription(weather.weather_code),
+                    'Temperature: ' + measurement(weather.temperature_2m, '°C'),
+                    'Feels like: ' + measurement(weather.apparent_temperature, '°C'),
+                    'Humidity: ' + measurement(weather.relative_humidity_2m, '%'),
+                    'Wind: ' + measurement(weather.wind_speed_10m, 'km/h'),
+                    ...(weather.time ? ['Data time: ' + weather.time.replace('T', ' ') + ' (local)'] : [])
+                ].join('\n');
+            } catch (error) {
+                console.error('Weather lookup failed:', error);
+                result.textContent = controller.signal.aborted
+                    ? 'Request timed out. Please try again.'
+                    : 'Could not fetch weather. Please check your connection and try again.';
+            } finally {
+                clearTimeout(timeout);
+                button.disabled = false;
+                button.textContent = 'Get weather';
+            }
+        });
+    </script>
 </body>
 </html>
